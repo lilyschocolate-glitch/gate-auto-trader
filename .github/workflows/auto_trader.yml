@@ -1,0 +1,37 @@
+name: Gate.io Daijunkan MACD Auto Trader
+
+on:
+  schedule:
+    # 5分〜15分間隔でクラウド上から自動実行（大循環MACDの15分足・1時間足判定に最適）
+    - cron: "*/5 * * * *"
+  workflow_dispatch: # 手動で今すぐ実行したいときのボタン
+
+jobs:
+  trade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run Daijunkan MACD Auto Trader (5-minute continuous cycle)
+        env:
+          GATE_API_KEY: ${{ secrets.GATE_API_KEY }}
+          GATE_API_SECRET: ${{ secrets.GATE_API_SECRET }}
+        run: |
+          # 1回の起動で1分おきに4回チェックして終了し、次のスケジュールにバトンタッチする
+          python3 -c '
+          import os, time
+          from daijunkan_macd import GateTrader
+          from auto_trader import run_cycle
+          trader = GateTrader(os.environ["GATE_API_KEY"], os.environ["GATE_API_SECRET"])
+          for i in range(4):
+              run_cycle(trader)
+              if i < 3:
+                  time.sleep(60)
+          '
