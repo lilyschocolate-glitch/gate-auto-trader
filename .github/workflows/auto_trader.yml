@@ -4,14 +4,14 @@ on:
   push:
     branches: [main]
   schedule:
-    # 5分間隔でクラウド上から自動実行
-    - cron: "*/5 * * * *"
+    # 大循環MACDの15分足・1時間足に合わせて定期チェック（1回あたり約5秒で完了する軽量設計）
+    - cron: "*/10 * * * *"
   workflow_dispatch:
 
 jobs:
   trade:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 2
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -25,10 +25,4 @@ jobs:
         env:
           GATE_API_KEY: ${{ secrets.GATE_API_KEY }}
           GATE_API_SECRET: ${{ secrets.GATE_API_SECRET }}
-        run: |
-          for i in 1 2 3 4; do
-            python3 auto_trader.py
-            if [ $i -lt 4 ]; then
-              sleep 60
-            fi
-          done
+        run: python3 auto_trader.py
