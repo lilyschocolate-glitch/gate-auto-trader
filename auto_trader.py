@@ -96,6 +96,7 @@ def ensure_orders_for_contract(trader: GateTrader, contract: str, total_equity: 
         return
 
     # 5. 新規エントリー注文の配置（複利サイズ計算）
+    trader.set_max_leverage(contract)
     # 口座総資産に応じて、BTCは15倍相当×2本、ETHとSOLは12倍相当の想定元本を割り当て（合計でも安全余力を確保）
     if contract == "BTC_USDT":
         notional_1 = total_equity * 18.0
@@ -196,7 +197,6 @@ def run_cycle(trader: GateTrader) -> None:
     log(f"=== 口座チェック: 総資産={total_equity:.2f} USDT (利用可能={avail:.2f}, 含み損益={pnl:+.2f}) ===")
 
     for contract in ["BTC_USDT", "ETH_USDT", "SOL_USDT"]:
-        trader.set_max_leverage(contract)
         ensure_orders_for_contract(trader, contract, total_equity)
 
 
