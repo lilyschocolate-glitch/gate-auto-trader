@@ -4,11 +4,9 @@ on:
   push:
     branches: [main]
   schedule:
+    # 5分間隔でクラウド上から自動実行
     - cron: "*/5 * * * *"
   workflow_dispatch:
-
-permissions:
-  contents: write
 
 jobs:
   trade:
@@ -28,24 +26,9 @@ jobs:
           GATE_API_KEY: ${{ secrets.GATE_API_KEY }}
           GATE_API_SECRET: ${{ secrets.GATE_API_SECRET }}
         run: |
-          python3 -c '
-          import os, traceback
-          from daijunkan_macd import GateTrader
-          from auto_trader import run_cycle
-          key = os.environ.get("GATE_API_KEY", "")
-          sec = os.environ.get("GATE_API_SECRET", "")
-          with open("last_run_log.txt", "w") as f:
-              f.write(f"KEY_LEN={len(key)} SEC_LEN={len(sec)}\n")
-              try:
-                  trader = GateTrader(key, sec)
-                  run_cycle(trader)
-                  f.write("SUCCESS\n")
-              except Exception as e:
-                  f.write(f"ERROR: {e}\n")
-                  f.write(traceback.format_exc())
-          '
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git add last_run_log.txt
-          git commit -m "Update run log [skip ci]" || true
-          git push || true
+          for i in 1 2 3 4; do
+            python3 auto_trader.py
+            if [ $i -lt 4 ]; then
+              sleep 60
+            fi
+          done
