@@ -4,23 +4,19 @@
 動作内容:
 1. 口座の総資産（Total Equity）を取得し、資金増加に合わせて複利でロットサイズを自動計算する。
 2. 対象銘柄（BTC_USDT 200x, ETH_USDT 200x, SOL_USDT 100x）のレバレッジを常に最高倍率に保つ。
-3. 大循環MACDのステージと3本のMACDの傾きを監視し:
-   - ポジション保有中: TP（利確指値）とSL（逆指値トリガー）が未設定なら自動設定し、
-     含み益が伸びたら1時間足の長期EMA(40)に合わせてSLを自動引き下げ（トレーリングストップ）。
-   - 未保有時: 大循環MACDの「特Aシグナル（第4/第1ステージ揃い）」または「Bシグナル（帯での待ち伏せ）」に
-     基づいて自動で指値注文を配置・更新する。
+3. 古い未約定注文や決済後の残りトリガー注文を自動でお掃除・最新EMA価格へ更新する。
+4. 大循環MACDのステージと3本のMACDの傾きを監視し、ロング・ショート両方向で自動発注・TP/SL管理を行う。
 """
 
+import os
 import time
 from datetime import datetime
-import os
 from daijunkan_macd import (
     CONTRACT_SPECS,
     GateTrader,
     evaluate_master_signal,
     fetch_timeframe_analysis,
     load_dotenv,
-    send_mac_notification,
 )
 
 
@@ -30,12 +26,17 @@ def log(msg: str) -> None:
     print(f"[{now}] {msg}", flush=True)
 
 
+def cleanup_contract_orders(trader: GateTrader, contract: str) -> None:
+    """指定銘柄の未約定指値注文およびトリガー注文をすべてキャンセルして綺麗にする。"""
+    trader._request("DELETE", "/api/v4/futures/usdt/orders", f"contract={contract}")
+    trader._request("DELETE", "/api/v4/futures/usdt/price_orders", f"contract={contract}")
+
+
 def ensure_orders_for_contract(trader: GateTrader, contract: str, total_equity: float) -> None:
-    """銘柄ごとの大循環MACDシグナルを判定し、注文配置および保有ポジションのTP/SL管理を行う。"""
+    """銘柄ごとの大循環MACDシグナルを判定し、注文更新および保有ポジションのTP/SL管理を行う。"""
     spec = CONTRACT_SPECS[contract]
     decimals = 2 if contract != "BTC_USDT" else 1
 
-    # 1. 各時間足の大循環MACDを計算
     analyses = {
         tf: fetch_timeframe_analysis(contract, tf)
         for tf in ["15m", "1h", "2h", "4h", "1d"]
@@ -43,15 +44,13 @@ def ensure_orders_for_contract(trader: GateTrader, contract: str, total_equity: 
     signal = evaluate_master_signal(analyses, decimals=decimals)
     tf_1h = analyses["1h"]
     tf_2h = analyses["2h"]
-    tf_15m = analyses["15m"]
     price = signal["current_price"]
 
-    # 2. 現在の保有ポジションと待機注文を取得
     positions = [p for p in trader.get_positions() if p.get("contract") == contract]
     open_orders = trader.get_open_orders(contract)
     price_orders = trader.get_price_orders(contract)
 
-    # 3. すでにポジションを保有している場合：証拠金バッファ・TP（利確）・SL（損切り）を自動管理
+    # 1. ポジション保有中の場合：証拠金バッファ・TP（利確）・SL（損切り）を管理
     if positions:
         pos = positions[0]
         size = int(pos.get("size", 0))
@@ -59,7 +58,7 @@ def ensure_orders_for_contract(trader: GateTrader, contract: str, total_equity: 
         liq_price = float(pos.get("liq_price", 0.0))
         is_short = size < 0
 
-        # 分離マージンのロスカット価格がSLより手前に来ないよう、自動で証拠金バッファを追加する
+        # 分離マージンのロスカット価格がSLより手前に来ないよう、自動で証拠金バッファを追加
         sl_target = signal["stop_loss"]
         if is_short and liq_price > 0 and liq_price <= max(sl_target, price + tf_1h.atr * 0.9):
             try:
@@ -74,9 +73,7 @@ def ensure_orders_for_contract(trader: GateTrader, contract: str, total_equity: 
             except Exception:
                 pass
 
-        # SLトリガー注文が存在するか確認
-        has_sl = len(price_orders) > 0
-        if not has_sl:
+        if not price_orders:
             sl_price = signal["stop_loss"]
             if is_short and sl_price <= price:
                 sl_price = round(price + tf_1h.atr * 0.8, decimals)
@@ -86,9 +83,8 @@ def ensure_orders_for_contract(trader: GateTrader, contract: str, total_equity: 
             rule = 1 if is_short else 2
             order_type = "close-short-position" if is_short else "close-long-position"
             trader.place_price_trigger_order(contract, sl_price, rule, order_type)
-            log(f"[{contract}] 保有ポジション({size}枚)に自動損切り(SL)をセットしました: {sl_price}")
+            log(f"[{contract}] 保有ポジション({size}枚)に自動損切り(SL)をセット: {sl_price}")
 
-        # TP（利確指値）が存在するか確認
         reduce_orders = [o for o in open_orders if o.get("is_reduce_only")]
         if not reduce_orders:
             tp_price = signal["tp1"]
@@ -98,110 +94,109 @@ def ensure_orders_for_contract(trader: GateTrader, contract: str, total_equity: 
                 tp_price = round(entry_price + tf_1h.atr * 1.5, decimals)
 
             trader.place_limit_order(contract, -size, tp_price, reduce_only=True)
-            log(f"[{contract}] 保有ポジション({size}枚)に自動利確指値(TP)をセットしました: {tp_price}")
+            log(f"[{contract}] 保有ポジション({size}枚)に自動利確指値(TP)をセット: {tp_price}")
 
         return
 
-    # 4. ポジション未保有で、すでに新規指値注文が待機中の場合はそのまま維持
+    # 2. ポジション未保有時：古い注文・不要な残りトリガーのお掃除判定
     entry_orders = [o for o in open_orders if not o.get("is_reduce_only")]
+
+    # ポジションも新規指値もないのに古いトリガーだけ残っている場合は削除
+    if not entry_orders and price_orders:
+        cleanup_contract_orders(trader, contract)
+        log(f"[{contract}] 決済後に残っていた古いトリガー注文({len(price_orders)}件)を自動削除しました")
+        price_orders = []
+
+    sig_type = signal["signal_type"]
+    want_short = sig_type in ("SHORT_NOW", "SHORT_LIMIT_WAIT")
+    want_long = sig_type in ("LONG_NOW", "LONG_LIMIT_WAIT")
+
+    # 待機中の古い指値注文がある場合、方向転換またはEMAからの乖離をチェックして自動更新
     if entry_orders:
-        log(
-            f"[{contract}] 現在値={price} | ステージ(1h)={tf_1h.stage_name} | "
-            f"待機中の指値注文 {len(entry_orders)}件を維持中"
-        )
+        old_order = entry_orders[0]
+        old_price = float(old_order.get("price", 0.0))
+        old_size = int(old_order.get("size", 0))
+        old_is_short = old_size < 0
+
+        # 様子見に変わった、または売買方向が変わった、またはEMAから0.5ATR以上ズレたら古い注文を取り消す
+        price_diff = abs(old_price - signal["entry_price"])
+        if (
+            (not want_short and not want_long)
+            or (want_short and not old_is_short)
+            or (want_long and old_is_short)
+            or (price_diff > tf_1h.atr * 0.5)
+        ):
+            cleanup_contract_orders(trader, contract)
+            log(
+                f"[{contract}] 古い指値注文({old_price})が現在のEMAライン({signal['entry_price']})から"
+                f"ズレたため自動キャンセルして更新します"
+            )
+        else:
+            log(
+                f"[{contract}] 現在値={price} | 1h={tf_1h.stage_name} | "
+                f"有効な指値注文({old_price})を維持中"
+            )
+            return
+
+    if not want_short and not want_long:
+        log(f"[{contract}] 現在値={price} | 判定={signal['signal_grade']} | 新規注文なし（待機）")
         return
 
-    # 5. 新規エントリー注文の配置（複利サイズ計算）
+    # 3. 最新のEMAラインに新規指値注文＋TP/SLトリガーをセット
     trader.set_max_leverage(contract)
-    # 口座総資産に応じて、BTCは15倍相当×2本、ETHとSOLは12倍相当の想定元本を割り当て（合計でも安全余力を確保）
-    if contract == "BTC_USDT":
-        notional_1 = total_equity * 18.0
-        contracts_1 = max(int(round((notional_1 / price) / spec["multiplier"])), 1)
+    mult = 15.0 if contract == "BTC_USDT" else (12.0 if contract == "ETH_USDT" else 10.0)
+    notional = total_equity * mult
+    contracts = max(int(round((notional / price) / spec["multiplier"])), 1)
 
-        # 第1弾: 15分足の戻り目（EMA5〜EMA40の上側）でのショート指値
-        entry_1 = round(max(price + 25.0, tf_15m.ema5 + 15.0), decimals)
-        # 第2弾: 1時間足長期EMA(40)と2時間足中期EMA(20)が重なる帯での本命待ち伏せ指値
-        band_price = round(min(tf_1h.ema40, tf_2h.ema20), decimals)
+    if want_short:
+        band_price = round(max(tf_1h.ema20, min(tf_1h.ema40, tf_2h.ema20)), decimals)
+        entry_p = max(round(price + tf_1h.atr * 0.15, decimals), band_price)
+        sl_p = max(round(entry_p + tf_1h.atr * 0.65, decimals), round(price + tf_1h.atr * 0.4, decimals))
+        tp_p = min(round(entry_p - tf_1h.atr * 1.6, decimals), round(price - tf_1h.atr * 0.5, decimals))
 
-        if signal["signal_type"] in ("SHORT_NOW", "SHORT_LIMIT_WAIT"):
-            trader.place_limit_order(contract, -contracts_1, entry_1, reduce_only=False)
-            log(f"[{contract}] 第1弾ショート指値を発注: -{contracts_1}枚 @ {entry_1} USDT (200倍)")
-            total_size = contracts_1
-            if abs(band_price - entry_1) > 80.0:
-                trader.place_limit_order(contract, -contracts_1, band_price, reduce_only=False)
-                log(f"[{contract}] 第2弾(大循環の帯)ショート指値を発注: -{contracts_1}枚 @ {band_price} USDT (200倍)")
-                total_size += contracts_1
-            if not price_orders:
-                trader._request(
-                    "POST",
-                    "/api/v4/futures/usdt/price_orders",
-                    payload={
-                        "initial": {"contract": contract, "size": total_size, "price": "0", "tif": "ioc", "reduce_only": True},
-                        "trigger": {"strategy_type": 0, "price_type": 0, "price": str(signal["stop_loss"]), "rule": 1, "expiration": 86400 * 7},
-                    },
-                )
-                trader._request(
-                    "POST",
-                    "/api/v4/futures/usdt/price_orders",
-                    payload={
-                        "initial": {"contract": contract, "size": total_size, "price": "0", "tif": "ioc", "reduce_only": True},
-                        "trigger": {"strategy_type": 0, "price_type": 0, "price": str(signal["tp1"]), "rule": 2, "expiration": 86400 * 7},
-                    },
-                )
+        trader.place_limit_order(contract, -contracts, entry_p, reduce_only=False)
+        trader._request(
+            "POST",
+            "/api/v4/futures/usdt/price_orders",
+            payload={
+                "initial": {"contract": contract, "size": contracts, "price": "0", "tif": "ioc", "reduce_only": True},
+                "trigger": {"strategy_type": 0, "price_type": 0, "price": str(sl_p), "rule": 1, "expiration": 86400 * 3},
+            },
+        )
+        trader._request(
+            "POST",
+            "/api/v4/futures/usdt/price_orders",
+            payload={
+                "initial": {"contract": contract, "size": contracts, "price": "0", "tif": "ioc", "reduce_only": True},
+                "trigger": {"strategy_type": 0, "price_type": 0, "price": str(tp_p), "rule": 2, "expiration": 86400 * 3},
+            },
+        )
+        log(f"[{contract}] 最新ショート指値を配置: -{contracts}枚 @ {entry_p} (SL:{sl_p} / TP:{tp_p})")
 
-    elif contract == "ETH_USDT":
-        notional = total_equity * 12.0
-        contracts = max(int(round((notional / price) / spec["multiplier"])), 1)
-        band_price = round(min(tf_1h.ema40, tf_2h.ema20), decimals)
-        entry_price = max(round(price + 1.5, decimals), band_price)
+    elif want_long:
+        band_price = round(min(tf_1h.ema20, max(tf_1h.ema40, tf_2h.ema20)), decimals)
+        entry_p = min(round(price - tf_1h.atr * 0.15, decimals), band_price)
+        sl_p = min(round(entry_p - tf_1h.atr * 0.65, decimals), round(price - tf_1h.atr * 0.4, decimals))
+        tp_p = max(round(entry_p + tf_1h.atr * 1.6, decimals), round(price + tf_1h.atr * 0.5, decimals))
 
-        if signal["signal_type"] in ("SHORT_NOW", "SHORT_LIMIT_WAIT"):
-            trader.place_limit_order(contract, -contracts, entry_price, reduce_only=False)
-            log(f"[{contract}] 大循環の帯ショート指値を発注: -{contracts}枚 @ {entry_price} USDT (200倍)")
-            if not price_orders:
-                trader._request(
-                    "POST",
-                    "/api/v4/futures/usdt/price_orders",
-                    payload={
-                        "initial": {"contract": contract, "size": contracts, "price": "0", "tif": "ioc", "reduce_only": True},
-                        "trigger": {"strategy_type": 0, "price_type": 0, "price": str(signal["stop_loss"]), "rule": 1, "expiration": 86400 * 7},
-                    },
-                )
-                trader._request(
-                    "POST",
-                    "/api/v4/futures/usdt/price_orders",
-                    payload={
-                        "initial": {"contract": contract, "size": contracts, "price": "0", "tif": "ioc", "reduce_only": True},
-                        "trigger": {"strategy_type": 0, "price_type": 0, "price": str(signal["tp1"]), "rule": 2, "expiration": 86400 * 7},
-                    },
-                )
-
-    elif contract == "SOL_USDT":
-        notional = total_equity * 10.0
-        contracts = max(int(round((notional / price) / spec["multiplier"])), 1)
-        band_price = round(min(tf_1h.ema40, tf_2h.ema20), decimals)
-        entry_price = max(round(price + 0.15, decimals), band_price)
-
-        if signal["signal_type"] in ("SHORT_NOW", "SHORT_LIMIT_WAIT"):
-            trader.place_limit_order(contract, -contracts, entry_price, reduce_only=False)
-            log(f"[{contract}] 第4ステージ戻り売り指値を発注: -{contracts}枚 @ {entry_price} USDT (100倍)")
-            if not price_orders:
-                trader._request(
-                    "POST",
-                    "/api/v4/futures/usdt/price_orders",
-                    payload={
-                        "initial": {"contract": contract, "size": contracts, "price": "0", "tif": "ioc", "reduce_only": True},
-                        "trigger": {"strategy_type": 0, "price_type": 0, "price": str(signal["stop_loss"]), "rule": 1, "expiration": 86400 * 7},
-                    },
-                )
-                trader._request(
-                    "POST",
-                    "/api/v4/futures/usdt/price_orders",
-                    payload={
-                        "initial": {"contract": contract, "size": contracts, "price": "0", "tif": "ioc", "reduce_only": True},
-                        "trigger": {"strategy_type": 0, "price_type": 0, "price": str(signal["tp1"]), "rule": 2, "expiration": 86400 * 7},
-                    },
-                )
+        trader.place_limit_order(contract, contracts, entry_p, reduce_only=False)
+        trader._request(
+            "POST",
+            "/api/v4/futures/usdt/price_orders",
+            payload={
+                "initial": {"contract": contract, "size": contracts, "price": "0", "tif": "ioc", "reduce_only": True},
+                "trigger": {"strategy_type": 0, "price_type": 0, "price": str(sl_p), "rule": 2, "expiration": 86400 * 3},
+            },
+        )
+        trader._request(
+            "POST",
+            "/api/v4/futures/usdt/price_orders",
+            payload={
+                "initial": {"contract": contract, "size": contracts, "price": "0", "tif": "ioc", "reduce_only": True},
+                "trigger": {"strategy_type": 0, "price_type": 0, "price": str(tp_p), "rule": 1, "expiration": 86400 * 3},
+            },
+        )
+        log(f"[{contract}] 最新ロング指値を配置: +{contracts}枚 @ {entry_p} (SL:{sl_p} / TP:{tp_p})")
 
 
 def run_cycle(trader: GateTrader) -> None:

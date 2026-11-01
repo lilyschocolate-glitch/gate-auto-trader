@@ -181,8 +181,10 @@ def evaluate_master_signal(analyses: dict[str, TimeframeAnalysis], decimals: int
     tf_4h = analyses["4h"]
     price = tf_15m.close
 
-    higher_bearish = tf_4h.stage == 4 and tf_2h.stage in (3, 4, 5)
-    higher_bullish = tf_4h.stage == 1 and tf_2h.stage in (6, 1, 2)
+    higher_bearish = tf_4h.stage == 4 and tf_2h.stage in (3, 4)
+    higher_bullish = (tf_4h.stage == 1 and tf_2h.stage in (6, 1, 2)) or (
+        tf_1h.stage == 1 and tf_2h.stage in (5, 6, 1) and tf_1h.dir1 == 1 and tf_2h.dir1 == 1
+    )
 
     signal_type = "WAIT"
     signal_grade = "様子見・待機"
