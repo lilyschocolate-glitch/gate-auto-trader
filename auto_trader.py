@@ -111,6 +111,15 @@ def ensure_orders_for_contract(trader: GateTrader, contract: str, total_equity: 
     want_short = sig_type in ("SHORT_NOW", "SHORT_LIMIT_WAIT")
     want_long = sig_type in ("LONG_NOW", "LONG_LIMIT_WAIT")
 
+    if want_short:
+        band_price = round(max(tf_1h.ema20, min(tf_1h.ema40, tf_2h.ema20)), decimals)
+        target_entry_p = max(round(price + tf_1h.atr * 0.15, decimals), band_price)
+    elif want_long:
+        band_price = round(min(tf_1h.ema20, max(tf_1h.ema40, tf_2h.ema20)), decimals)
+        target_entry_p = min(round(price - tf_1h.atr * 0.15, decimals), band_price)
+    else:
+        target_entry_p = signal["entry_price"]
+
     # 待機中の古い指値注文がある場合、方向転換またはEMAからの乖離をチェックして自動更新
     if entry_orders:
         old_order = entry_orders[0]
@@ -118,17 +127,17 @@ def ensure_orders_for_contract(trader: GateTrader, contract: str, total_equity: 
         old_size = int(old_order.get("size", 0))
         old_is_short = old_size < 0
 
-        # 様子見に変わった、または売買方向が変わった、またはEMAから0.5ATR以上ズレたら古い注文を取り消す
-        price_diff = abs(old_price - signal["entry_price"])
+        # 様子見に変わった、または売買方向が変わった、または目標EMAラインから0.35ATR以上ズレたら古い注文を取り消す
+        price_diff = abs(old_price - target_entry_p)
         if (
             (not want_short and not want_long)
             or (want_short and not old_is_short)
             or (want_long and old_is_short)
-            or (price_diff > tf_1h.atr * 0.5)
+            or (price_diff > tf_1h.atr * 0.35)
         ):
             cleanup_contract_orders(trader, contract)
             log(
-                f"[{contract}] 古い指値注文({old_price})が現在のEMAライン({signal['entry_price']})から"
+                f"[{contract}] 古い指値注文({old_price})が最新の目標EMAライン({target_entry_p})から"
                 f"ズレたため自動キャンセルして更新します"
             )
         else:
