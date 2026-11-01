@@ -51,12 +51,28 @@ def ensure_orders_for_contract(trader: GateTrader, contract: str, total_equity: 
     open_orders = trader.get_open_orders(contract)
     price_orders = trader.get_price_orders(contract)
 
-    # 3. すでにポジションを保有している場合：TP（利確）とSL（損切り・トレーリング）を自動管理
+    # 3. すでにポジションを保有している場合：証拠金バッファ・TP（利確）・SL（損切り）を自動管理
     if positions:
         pos = positions[0]
         size = int(pos.get("size", 0))
         entry_price = float(pos.get("entry_price", price))
+        liq_price = float(pos.get("liq_price", 0.0))
         is_short = size < 0
+
+        # 分離マージンのロスカット価格がSLより手前に来ないよう、自動で証拠金バッファを追加する
+        sl_target = signal["stop_loss"]
+        if is_short and liq_price > 0 and liq_price <= max(sl_target, price + tf_1h.atr * 0.9):
+            try:
+                trader._request("POST", f"/api/v4/futures/usdt/positions/{contract}/margin", "change=8")
+                log(f"[{contract}] ロスカット予防のため証拠金バッファ(+8 USDT)を自動追加しました")
+            except Exception:
+                pass
+        elif not is_short and liq_price > 0 and liq_price >= min(sl_target, price - tf_1h.atr * 0.9):
+            try:
+                trader._request("POST", f"/api/v4/futures/usdt/positions/{contract}/margin", "change=8")
+                log(f"[{contract}] ロスカット予防のため証拠金バッファ(+8 USDT)を自動追加しました")
+            except Exception:
+                pass
 
         # SLトリガー注文が存在するか確認
         has_sl = len(price_orders) > 0

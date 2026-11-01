@@ -207,11 +207,11 @@ def evaluate_master_signal(analyses: dict[str, TimeframeAnalysis], decimals: int
             stop_loss = round(max(tf_1h.ema40, resistance_band_high) + tf_1h.atr * 0.35, decimals)
             tp1 = round(price - tf_4h.atr * 1.3, decimals)
             tp2 = round(price - tf_4h.atr * 2.8, decimals)
-        elif tf_1h.stage in (5, 6, 1) or tf_1h.dir1 == 1:
+        elif (tf_1h.stage == 5 and tf_1h.dir1 == -1) or (tf_1h.stage == 4 and tf_15m.dir1 == -1):
             signal_type = "SHORT_LIMIT_WAIT"
-            signal_grade = "Bシグナル：戻り売り待ち伏せ（1時間足が小休止中）"
+            signal_grade = "Bシグナル：戻り売り待ち伏せ（1時間足の戻しが失速開始）"
             action_summary = (
-                f"上位足（日足・4h・2h）は第4ステージ（下降）ですが、1時間足が戻しを作っています。"
+                f"上位足（日足・4h・2h）は第4ステージ（下降）で、1時間足の戻しもMACD1が下向きに失速しました。"
                 f"1時間足の長期EMA({tf_1h.ema40:.{decimals}f})と2時間足の中期EMA({tf_2h.ema20:.{decimals}f})が重なる"
                 f" {resistance_band_low:.{decimals}f}〜{resistance_band_high:.{decimals}f} 付近が絶好の戻り売り天井になります。"
             )
@@ -219,6 +219,17 @@ def evaluate_master_signal(analyses: dict[str, TimeframeAnalysis], decimals: int
             stop_loss = round(resistance_band_high + tf_1h.atr * 0.5, decimals)
             tp1 = round(price - tf_4h.atr * 1.3, decimals)
             tp2 = round(price - tf_4h.atr * 2.8, decimals)
+        else:
+            signal_type = "WAIT"
+            signal_grade = f"様子見・待機（1時間足が{tf_1h.stage_name}で反発継続中）"
+            action_summary = (
+                "上位足は第4ステージですが、1時間足のMACD1がまだ上向き（または第6・第1ステージ）のため、"
+                "反発が終わって1時間足のMACD1が下向きに折れ曲がるまで新規ショートは待機します。"
+            )
+            entry_price = round(resistance_band_high, decimals)
+            stop_loss = round(resistance_band_high + tf_1h.atr * 0.6, decimals)
+            tp1 = round(price - tf_4h.atr * 1.2, decimals)
+            tp2 = round(price - tf_4h.atr * 2.5, decimals)
 
     elif higher_bullish:
         support_band_high = max(tf_1h.ema40, tf_2h.ema20)
