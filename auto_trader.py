@@ -44,6 +44,7 @@ def ensure_orders_for_contract(trader: GateTrader, contract: str, total_equity: 
     signal = evaluate_master_signal(analyses, decimals=decimals)
     tf_1h = analyses["1h"]
     tf_2h = analyses["2h"]
+    tf_15m = analyses["15m"]
     price = signal["current_price"]
 
     positions = [p for p in trader.get_positions() if p.get("contract") == contract]
@@ -112,11 +113,17 @@ def ensure_orders_for_contract(trader: GateTrader, contract: str, total_equity: 
     want_long = sig_type in ("LONG_NOW", "LONG_LIMIT_WAIT")
 
     if want_short:
-        band_price = round(max(tf_1h.ema20, min(tf_1h.ema40, tf_2h.ema20)), decimals)
-        target_entry_p = max(round(price + tf_1h.atr * 0.15, decimals), band_price)
+        if sig_type == "SHORT_NOW":
+            band_price = round((tf_15m.ema20 + tf_1h.ema5) / 2.0, decimals)
+        else:
+            band_price = round(max(tf_1h.ema20, min(tf_1h.ema40, tf_2h.ema20)), decimals)
+        target_entry_p = max(round(price + tf_1h.atr * 0.1, decimals), band_price)
     elif want_long:
-        band_price = round(min(tf_1h.ema20, max(tf_1h.ema40, tf_2h.ema20)), decimals)
-        target_entry_p = min(round(price - tf_1h.atr * 0.15, decimals), band_price)
+        if sig_type == "LONG_NOW":
+            band_price = round((tf_15m.ema20 + tf_1h.ema5) / 2.0, decimals)
+        else:
+            band_price = round(min(tf_1h.ema20, max(tf_1h.ema40, tf_2h.ema20)), decimals)
+        target_entry_p = min(round(price - tf_1h.atr * 0.1, decimals), band_price)
     else:
         target_entry_p = signal["entry_price"]
 
@@ -127,13 +134,13 @@ def ensure_orders_for_contract(trader: GateTrader, contract: str, total_equity: 
         old_size = int(old_order.get("size", 0))
         old_is_short = old_size < 0
 
-        # 様子見に変わった、または売買方向が変わった、または目標EMAラインから0.35ATR以上ズレたら古い注文を取り消す
+        # 様子見に変わった、または売買方向が変わった、または目標EMAラインから0.2ATR以上ズレたら古い注文を取り消す
         price_diff = abs(old_price - target_entry_p)
         if (
             (not want_short and not want_long)
             or (want_short and not old_is_short)
             or (want_long and old_is_short)
-            or (price_diff > tf_1h.atr * 0.35)
+            or (price_diff > tf_1h.atr * 0.2)
         ):
             cleanup_contract_orders(trader, contract)
             log(
@@ -158,8 +165,7 @@ def ensure_orders_for_contract(trader: GateTrader, contract: str, total_equity: 
     contracts = max(int(round((notional / price) / spec["multiplier"])), 1)
 
     if want_short:
-        band_price = round(max(tf_1h.ema20, min(tf_1h.ema40, tf_2h.ema20)), decimals)
-        entry_p = max(round(price + tf_1h.atr * 0.15, decimals), band_price)
+        entry_p = target_entry_p
         sl_p = max(round(entry_p + tf_1h.atr * 0.65, decimals), round(price + tf_1h.atr * 0.4, decimals))
         tp_p = min(round(entry_p - tf_1h.atr * 1.6, decimals), round(price - tf_1h.atr * 0.5, decimals))
 
@@ -183,8 +189,7 @@ def ensure_orders_for_contract(trader: GateTrader, contract: str, total_equity: 
         log(f"[{contract}] 最新ショート指値を配置: -{contracts}枚 @ {entry_p} (SL:{sl_p} / TP:{tp_p})")
 
     elif want_long:
-        band_price = round(min(tf_1h.ema20, max(tf_1h.ema40, tf_2h.ema20)), decimals)
-        entry_p = min(round(price - tf_1h.atr * 0.15, decimals), band_price)
+        entry_p = target_entry_p
         sl_p = min(round(entry_p - tf_1h.atr * 0.65, decimals), round(price - tf_1h.atr * 0.4, decimals))
         tp_p = max(round(entry_p + tf_1h.atr * 1.6, decimals), round(price + tf_1h.atr * 0.5, decimals))
 
