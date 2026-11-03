@@ -179,12 +179,12 @@ def evaluate_master_signal(analyses: dict[str, TimeframeAnalysis], decimals: int
     tf_1h = analyses["1h"]
     tf_2h = analyses["2h"]
     tf_4h = analyses["4h"]
+    tf_1d = analyses["1d"]
     price = tf_15m.close
 
-    higher_bearish = tf_4h.stage == 4 and tf_2h.stage in (3, 4)
-    higher_bullish = (tf_4h.stage == 1 and tf_2h.stage in (6, 1, 2)) or (
-        tf_1h.stage == 1 and tf_2h.stage in (5, 6, 1) and tf_1h.dir1 == 1 and tf_2h.dir1 == 1
-    )
+    higher_bearish = tf_4h.stage == 4 and tf_2h.stage in (3, 4, 5)
+    # 日足(1d)が第4ステージ（下降）の間は、上位足4hが明確に第1ステージにならない限り逆張りロングを禁止する
+    higher_bullish = tf_1d.stage != 4 and tf_4h.stage == 1 and tf_2h.stage in (6, 1, 2)
 
     signal_type = "WAIT"
     signal_grade = "様子見・待機"
@@ -209,16 +209,15 @@ def evaluate_master_signal(analyses: dict[str, TimeframeAnalysis], decimals: int
             stop_loss = round(max(tf_1h.ema40, resistance_band_high) + tf_1h.atr * 0.35, decimals)
             tp1 = round(price - tf_4h.atr * 1.3, decimals)
             tp2 = round(price - tf_4h.atr * 2.8, decimals)
-        elif (tf_1h.stage == 5 and tf_1h.dir1 == -1) or (tf_1h.stage == 4 and tf_15m.dir1 == -1):
+        elif tf_1h.stage == 4 or (tf_1h.stage == 5 and tf_1h.dir1 == -1):
             signal_type = "SHORT_LIMIT_WAIT"
-            signal_grade = "Bシグナル：戻り売り待ち伏せ（1時間足の戻しが失速開始）"
+            signal_grade = "Aシグナル：第4ステージ戻り売り待ち伏せ（1時間足EMA20〜40の帯）"
             action_summary = (
-                f"上位足（日足・4h・2h）は第4ステージ（下降）で、1時間足の戻しもMACD1が下向きに失速しました。"
-                f"1時間足の長期EMA({tf_1h.ema40:.{decimals}f})と2時間足の中期EMA({tf_2h.ema20:.{decimals}f})が重なる"
-                f" {resistance_band_low:.{decimals}f}〜{resistance_band_high:.{decimals}f} 付近が絶好の戻り売り天井になります。"
+                f"日足・4h・2h・1hすべてが下降トレンド（第4ステージ）です。"
+                f"1時間足の中期EMA20({tf_1h.ema20:.{decimals}f})〜長期EMA40({tf_1h.ema40:.{decimals}f})への戻りを待ち伏せショートします。"
             )
-            entry_price = round(resistance_band_low, decimals)
-            stop_loss = round(resistance_band_high + tf_1h.atr * 0.5, decimals)
+            entry_price = round(tf_1h.ema20, decimals)
+            stop_loss = round(max(tf_1h.ema40, resistance_band_high) + tf_1h.atr * 0.45, decimals)
             tp1 = round(price - tf_4h.atr * 1.3, decimals)
             tp2 = round(price - tf_4h.atr * 2.8, decimals)
         else:
