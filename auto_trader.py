@@ -176,22 +176,16 @@ def ensure_orders_for_contract(trader: GateTrader, contract: str, total_equity: 
         log(f"[{contract}] 現在値={price} | 判定={signal['signal_grade']} | 新規注文なし（待機）")
         return
 
-    # 3. 損切りより先に強制ロスカットされない安全な倍率(25倍)＆リスク上限10%で新規発注
-    if contract == "SOL_USDT" and total_equity < 20.0:
-        log(f"[{contract}] 残高({total_equity:.2f} USDT)が20 USDT未満のため、最小単位が大きいSOLは見送ります")
-        return
-
-    trader.set_safe_leverage(contract, 25)
-    sl_dist = max(tf_1h.atr * 1.5, price * 0.005)
-    risk_usdt = max(total_equity * 0.10, 0.25)
-    risk_contracts = risk_usdt / (sl_dist * spec["multiplier"])
-    max_notional_contracts = (total_equity * 10.0) / (price * spec["multiplier"])
-    contracts = max(int(round(min(risk_contracts, max_notional_contracts))), 1)
+    # 3. クロスマージン＋限界レバレッジ(200倍/100倍)で攻めの複利ロット発注
+    trader.set_max_leverage(contract)
+    mult = 20.0 if contract in ("BTC_USDT", "ETH_USDT") else 15.0
+    notional = total_equity * mult
+    contracts = max(int(round((notional / price) / spec["multiplier"])), 1)
 
     if want_short:
         entry_p = target_entry_p
-        sl_p = max(round(entry_p + tf_1h.atr * 1.5, decimals), round(price + tf_1h.atr * 0.6, decimals))
-        tp_p = min(round(entry_p - tf_1h.atr * 2.8, decimals), round(price - tf_1h.atr * 0.8, decimals))
+        sl_p = max(round(entry_p + tf_1h.atr * 1.2, decimals), round(price + tf_1h.atr * 0.5, decimals))
+        tp_p = min(round(entry_p - tf_1h.atr * 2.5, decimals), round(price - tf_1h.atr * 0.8, decimals))
 
         trader.place_limit_order(contract, -contracts, entry_p, reduce_only=False)
         trader._request(
@@ -214,8 +208,8 @@ def ensure_orders_for_contract(trader: GateTrader, contract: str, total_equity: 
 
     elif want_long:
         entry_p = target_entry_p
-        sl_p = min(round(entry_p - tf_1h.atr * 1.5, decimals), round(price - tf_1h.atr * 0.6, decimals))
-        tp_p = max(round(entry_p + tf_1h.atr * 2.8, decimals), round(price + tf_1h.atr * 0.8, decimals))
+        sl_p = min(round(entry_p - tf_1h.atr * 1.2, decimals), round(price - tf_1h.atr * 0.5, decimals))
+        tp_p = max(round(entry_p + tf_1h.atr * 2.5, decimals), round(price + tf_1h.atr * 0.8, decimals))
 
         trader.place_limit_order(contract, contracts, entry_p, reduce_only=False)
         trader._request(

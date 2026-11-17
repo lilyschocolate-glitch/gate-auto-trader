@@ -333,18 +333,15 @@ class GateTrader:
         return self._request("GET", "/api/v4/futures/usdt/price_orders", f"contract={contract}&status=open")
 
     def set_max_leverage(self, contract: str) -> int:
-        """指定銘柄のレバレッジを分離マージンの最高倍率に設定する。"""
+        """指定銘柄をクロスマージン＋最大レバレッジ（BTC/ETH 200倍, SOL 100倍）に設定する。"""
         spec = CONTRACT_SPECS.get(contract, {"max_lev": 100})
         max_lev = spec["max_lev"]
-        self._request("POST", f"/api/v4/futures/usdt/positions/{contract}/leverage", f"leverage={max_lev}")
+        self._request(
+            "POST",
+            f"/api/v4/futures/usdt/positions/{contract}/leverage",
+            f"leverage=0&cross_leverage_limit={max_lev}",
+        )
         return max_lev
-
-    def set_safe_leverage(self, contract: str, target_lev: int = 25) -> int:
-        """損切りより先に強制ロスカットされない安全な倍率（例: 25倍）に設定する。"""
-        spec = CONTRACT_SPECS.get(contract, {"max_lev": 100})
-        lev = min(target_lev, spec["max_lev"])
-        self._request("POST", f"/api/v4/futures/usdt/positions/{contract}/leverage", f"leverage={lev}")
-        return lev
 
     def calculate_compounding_size(self, contract: str, price: float, equity_multiplier: float = 32.0) -> int:
         """口座の総資産（Total Equity）に応じて複利で注文コントラクト数を計算する。"""
