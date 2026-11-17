@@ -74,12 +74,30 @@ def ensure_orders_for_contract(trader: GateTrader, contract: str, total_equity: 
             except Exception:
                 pass
 
+        # 含み益が 1.2 * 1h ATR 以上伸びたら、損切りラインを建値付近（トレール）へ引き上げる
+        if is_short and (entry_price - price) >= tf_1h.atr * 1.2:
+            be_price = round(entry_price - tf_1h.atr * 0.1, decimals)
+            for po in price_orders:
+                trig = po.get("trigger", {})
+                if trig.get("rule") == 1 and float(trig.get("price", 0)) > be_price:
+                    trader._request("DELETE", f"/api/v4/futures/usdt/price_orders/{po['id']}")
+                    trader.place_price_trigger_order(contract, be_price, 1, "close-short-position")
+                    log(f"[{contract}] 含み益拡大のためSLを建値防衛ライン({be_price})へ移動しました")
+        elif not is_short and (price - entry_price) >= tf_1h.atr * 1.2:
+            be_price = round(entry_price + tf_1h.atr * 0.1, decimals)
+            for po in price_orders:
+                trig = po.get("trigger", {})
+                if trig.get("rule") == 2 and float(trig.get("price", 0)) < be_price:
+                    trader._request("DELETE", f"/api/v4/futures/usdt/price_orders/{po['id']}")
+                    trader.place_price_trigger_order(contract, be_price, 2, "close-long-position")
+                    log(f"[{contract}] 含み益拡大のためSLを建値防衛ライン({be_price})へ移動しました")
+
         if not price_orders:
             sl_price = signal["stop_loss"]
             if is_short and sl_price <= price:
-                sl_price = round(price + tf_1h.atr * 0.8, decimals)
+                sl_price = round(price + tf_1h.atr * 1.5, decimals)
             elif not is_short and sl_price >= price:
-                sl_price = round(price - tf_1h.atr * 0.8, decimals)
+                sl_price = round(price - tf_1h.atr * 1.5, decimals)
 
             rule = 1 if is_short else 2
             order_type = "close-short-position" if is_short else "close-long-position"
@@ -90,9 +108,9 @@ def ensure_orders_for_contract(trader: GateTrader, contract: str, total_equity: 
         if not reduce_orders:
             tp_price = signal["tp1"]
             if is_short and tp_price >= entry_price:
-                tp_price = round(entry_price - tf_1h.atr * 1.5, decimals)
+                tp_price = round(entry_price - tf_1h.atr * 2.8, decimals)
             elif not is_short and tp_price <= entry_price:
-                tp_price = round(entry_price + tf_1h.atr * 1.5, decimals)
+                tp_price = round(entry_price + tf_1h.atr * 2.8, decimals)
 
             trader.place_limit_order(contract, -size, tp_price, reduce_only=True)
             log(f"[{contract}] 保有ポジション({size}枚)に自動利確指値(TP)をセット: {tp_price}")
@@ -158,16 +176,22 @@ def ensure_orders_for_contract(trader: GateTrader, contract: str, total_equity: 
         log(f"[{contract}] 現在値={price} | 判定={signal['signal_grade']} | 新規注文なし（待機）")
         return
 
-    # 3. 最新のEMAラインに新規指値注文＋TP/SLトリガーをセット
-    trader.set_max_leverage(contract)
-    mult = 15.0 if contract == "BTC_USDT" else (12.0 if contract == "ETH_USDT" else 10.0)
-    notional = total_equity * mult
-    contracts = max(int(round((notional / price) / spec["multiplier"])), 1)
+    # 3. 損切りより先に強制ロスカットされない安全な倍率(25倍)＆リスク上限10%で新規発注
+    if contract == "SOL_USDT" and total_equity < 20.0:
+        log(f"[{contract}] 残高({total_equity:.2f} USDT)が20 USDT未満のため、最小単位が大きいSOLは見送ります")
+        return
+
+    trader.set_safe_leverage(contract, 25)
+    sl_dist = max(tf_1h.atr * 1.5, price * 0.005)
+    risk_usdt = max(total_equity * 0.10, 0.25)
+    risk_contracts = risk_usdt / (sl_dist * spec["multiplier"])
+    max_notional_contracts = (total_equity * 10.0) / (price * spec["multiplier"])
+    contracts = max(int(round(min(risk_contracts, max_notional_contracts))), 1)
 
     if want_short:
         entry_p = target_entry_p
-        sl_p = max(round(entry_p + tf_1h.atr * 0.65, decimals), round(price + tf_1h.atr * 0.4, decimals))
-        tp_p = min(round(entry_p - tf_1h.atr * 1.6, decimals), round(price - tf_1h.atr * 0.5, decimals))
+        sl_p = max(round(entry_p + tf_1h.atr * 1.5, decimals), round(price + tf_1h.atr * 0.6, decimals))
+        tp_p = min(round(entry_p - tf_1h.atr * 2.8, decimals), round(price - tf_1h.atr * 0.8, decimals))
 
         trader.place_limit_order(contract, -contracts, entry_p, reduce_only=False)
         trader._request(
@@ -190,8 +214,8 @@ def ensure_orders_for_contract(trader: GateTrader, contract: str, total_equity: 
 
     elif want_long:
         entry_p = target_entry_p
-        sl_p = min(round(entry_p - tf_1h.atr * 0.65, decimals), round(price - tf_1h.atr * 0.4, decimals))
-        tp_p = max(round(entry_p + tf_1h.atr * 1.6, decimals), round(price + tf_1h.atr * 0.5, decimals))
+        sl_p = min(round(entry_p - tf_1h.atr * 1.5, decimals), round(price - tf_1h.atr * 0.6, decimals))
+        tp_p = max(round(entry_p + tf_1h.atr * 2.8, decimals), round(price + tf_1h.atr * 0.8, decimals))
 
         trader.place_limit_order(contract, contracts, entry_p, reduce_only=False)
         trader._request(

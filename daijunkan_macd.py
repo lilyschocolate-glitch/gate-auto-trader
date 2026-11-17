@@ -198,62 +198,64 @@ def evaluate_master_signal(analyses: dict[str, TimeframeAnalysis], decimals: int
         resistance_band_low = min(tf_1h.ema40, tf_2h.ema20)
         resistance_band_high = max(tf_1h.ema40, tf_2h.ema20)
 
-        if tf_1h.stage == 4 and (tf_1h.dir1 == -1 or tf_15m.dir1 == -1):
-            signal_type = "SHORT_NOW"
-            signal_grade = "特Aシグナル：戻り売り本命（第4ステージ揃い）"
-            action_summary = (
-                "上位足（日足・4h・2h）と1時間足がすべて第4ステージに揃い、短期MACDも下向きです。"
-                "最も勝率が高い順張りショートのタイミングです。"
-            )
-            entry_price = round(max(price, tf_15m.ema5), decimals)
-            stop_loss = round(max(tf_1h.ema40, resistance_band_high) + tf_1h.atr * 0.35, decimals)
-            tp1 = round(price - tf_4h.atr * 1.3, decimals)
-            tp2 = round(price - tf_4h.atr * 2.8, decimals)
-        elif tf_1h.stage == 4 or (tf_1h.stage == 5 and tf_1h.dir1 == -1):
-            signal_type = "SHORT_LIMIT_WAIT"
-            signal_grade = "Aシグナル：第4ステージ戻り売り待ち伏せ（1時間足EMA20〜40の帯）"
-            action_summary = (
-                f"日足・4h・2h・1hすべてが下降トレンド（第4ステージ）です。"
-                f"1時間足の中期EMA20({tf_1h.ema20:.{decimals}f})〜長期EMA40({tf_1h.ema40:.{decimals}f})への戻りを待ち伏せショートします。"
-            )
-            entry_price = round(tf_1h.ema20, decimals)
-            stop_loss = round(max(tf_1h.ema40, resistance_band_high) + tf_1h.atr * 0.45, decimals)
-            tp1 = round(price - tf_4h.atr * 1.3, decimals)
-            tp2 = round(price - tf_4h.atr * 2.8, decimals)
+        # 1時間足が第3または第4ステージで、MACD1とMACD2の両方が明確に下向きに揃ったときのみショートを狙う
+        if tf_1h.stage in (3, 4) and tf_1h.dir1 == -1 and tf_1h.dir2 == -1:
+            if price < tf_1h.ema20 - tf_1h.atr * 1.2:
+                signal_type = "SHORT_LIMIT_WAIT"
+                signal_grade = "Aシグナル：戻り待ちショート（下げ過ぎ追従防止）"
+                action_summary = (
+                    "下降トレンドですが直近で下げ過ぎているため、1時間足EMA5付近への小戻りを待ってからショートします。"
+                )
+                entry_price = round(tf_1h.ema5, decimals)
+            else:
+                signal_type = "SHORT_NOW"
+                signal_grade = "特Aシグナル：戻り売り本命（ステージ＆MACD完全一致）"
+                action_summary = (
+                    "上位足（4h・2h）と1時間足が下降ステージに揃い、1時間足のMACD1・MACD2も下向きに転換しました。"
+                )
+                entry_price = round(max(price, tf_15m.ema5), decimals)
+            stop_loss = round(entry_price + tf_1h.atr * 1.5, decimals)
+            tp1 = round(entry_price - tf_1h.atr * 2.8, decimals)
+            tp2 = round(entry_price - tf_4h.atr * 2.8, decimals)
         else:
             signal_type = "WAIT"
-            signal_grade = f"様子見・待機（1時間足が{tf_1h.stage_name}で反発継続中）"
+            signal_grade = f"様子見・待機（1時間足が{tf_1h.stage_name}で反発中または方向不一致）"
             action_summary = (
-                "上位足は第4ステージですが、1時間足のMACD1がまだ上向き（または第6・第1ステージ）のため、"
-                "反発が終わって1時間足のMACD1が下向きに折れ曲がるまで新規ショートは待機します。"
+                "上位足は第4ステージですが、1時間足のMACD1・MACD2がまだ下向きに揃っていないため、"
+                "反発が終わって反転を確認するまで新規ショートは待機します。"
             )
             entry_price = round(resistance_band_high, decimals)
-            stop_loss = round(resistance_band_high + tf_1h.atr * 0.6, decimals)
-            tp1 = round(price - tf_4h.atr * 1.2, decimals)
-            tp2 = round(price - tf_4h.atr * 2.5, decimals)
+            stop_loss = round(resistance_band_high + tf_1h.atr * 1.5, decimals)
+            tp1 = round(price - tf_1h.atr * 2.8, decimals)
+            tp2 = round(price - tf_4h.atr * 2.8, decimals)
 
     elif higher_bullish:
         support_band_high = max(tf_1h.ema40, tf_2h.ema20)
         support_band_low = min(tf_1h.ema40, tf_2h.ema20)
 
-        if tf_1h.stage == 1 and (tf_1h.dir1 == 1 or tf_15m.dir1 == 1):
-            signal_type = "LONG_NOW"
-            signal_grade = "特Aシグナル：押し目買い本命（第1ステージ揃い）"
-            action_summary = "上位足と1時間足が第1ステージで上向きに揃いました。順張りロングの好機です。"
-            entry_price = round(min(price, tf_15m.ema5), decimals)
-            stop_loss = round(min(tf_1h.ema40, support_band_low) - tf_1h.atr * 0.35, decimals)
-            tp1 = round(price + tf_4h.atr * 1.3, decimals)
-            tp2 = round(price + tf_4h.atr * 2.8, decimals)
+        if tf_1h.stage in (6, 1) and tf_1h.dir1 == 1 and tf_1h.dir2 == 1:
+            if price > tf_1h.ema20 + tf_1h.atr * 1.2:
+                signal_type = "LONG_LIMIT_WAIT"
+                signal_grade = "Aシグナル：押し目待ちロング（上げ過ぎ追従防止）"
+                action_summary = (
+                    "上昇トレンドですが直近で上げ過ぎているため、1時間足EMA5付近への押し目を待ってからロングします。"
+                )
+                entry_price = round(tf_1h.ema5, decimals)
+            else:
+                signal_type = "LONG_NOW"
+                signal_grade = "特Aシグナル：押し目買い本命（ステージ＆MACD完全一致）"
+                action_summary = "上位足と1時間足が上昇ステージで揃い、MACD1・MACD2も上向きです。"
+                entry_price = round(min(price, tf_15m.ema5), decimals)
+            stop_loss = round(entry_price - tf_1h.atr * 1.5, decimals)
+            tp1 = round(entry_price + tf_1h.atr * 2.8, decimals)
+            tp2 = round(entry_price + tf_4h.atr * 2.8, decimals)
         else:
-            signal_type = "LONG_LIMIT_WAIT"
-            signal_grade = "Bシグナル：押し目買い待ち伏せ（1時間足が押し目中）"
-            action_summary = (
-                f"上位足は第1ステージ（上昇）ですが、1時間足が押し目を作っています。"
-                f"{support_band_low:.{decimals}f}〜{support_band_high:.{decimals}f} の帯での反発ロングを狙います。"
-            )
-            entry_price = round(support_band_high, decimals)
-            stop_loss = round(support_band_low - tf_1h.atr * 0.5, decimals)
-            tp1 = round(price + tf_4h.atr * 1.3, decimals)
+            signal_type = "WAIT"
+            signal_grade = f"様子見・待機（1時間足が{tf_1h.stage_name}で調整中）"
+            action_summary = "上位足は上昇ですが、1時間足のMACD1・MACD2が上向きに揃うまで待機します。"
+            entry_price = round(support_band_low, decimals)
+            stop_loss = round(support_band_low - tf_1h.atr * 1.5, decimals)
+            tp1 = round(price + tf_1h.atr * 2.8, decimals)
             tp2 = round(price + tf_4h.atr * 2.8, decimals)
 
     else:
@@ -336,6 +338,13 @@ class GateTrader:
         max_lev = spec["max_lev"]
         self._request("POST", f"/api/v4/futures/usdt/positions/{contract}/leverage", f"leverage={max_lev}")
         return max_lev
+
+    def set_safe_leverage(self, contract: str, target_lev: int = 25) -> int:
+        """損切りより先に強制ロスカットされない安全な倍率（例: 25倍）に設定する。"""
+        spec = CONTRACT_SPECS.get(contract, {"max_lev": 100})
+        lev = min(target_lev, spec["max_lev"])
+        self._request("POST", f"/api/v4/futures/usdt/positions/{contract}/leverage", f"leverage={lev}")
+        return lev
 
     def calculate_compounding_size(self, contract: str, price: float, equity_multiplier: float = 32.0) -> int:
         """口座の総資産（Total Equity）に応じて複利で注文コントラクト数を計算する。"""
