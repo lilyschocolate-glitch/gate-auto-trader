@@ -8,6 +8,10 @@ on:
     - cron: "*/10 * * * *"
   workflow_dispatch:
 
+concurrency:
+  group: gate-auto-trader
+  cancel-in-progress: false
+
 jobs:
   trade:
     runs-on: ubuntu-latest
