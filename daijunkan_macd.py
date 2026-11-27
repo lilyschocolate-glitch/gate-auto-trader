@@ -182,10 +182,12 @@ def evaluate_master_signal(analyses: dict[str, TimeframeAnalysis], decimals: int
     tf_1d = analyses["1d"]
     price = tf_15m.close
 
-    higher_bearish = tf_4h.stage == 4 and tf_2h.stage in (3, 4, 5)
-    # 日足(1d)が第4ステージ以外、または日足MACD1・2が両方上向きで底打ち中のときに、
-    # 4時間足が第1ステージ（安定上昇）かつ2時間足も上昇系(6,1,2)へ揃えば上昇波ロングを許可する
+    # 通年・全相場対応の完全対称ルール：
+    # 上昇相場(日足第1ステージ)中は日足MACD1・2が下向きに天井打ちしない限り逆張りショートを抑え、
+    # 下降相場(日足第4ステージ)中は日足MACD1・2が上向きに底打ちしない限り逆張りロングを抑える
+    daily_topping = tf_1d.stage != 1 or (tf_1d.dir1 == -1 and tf_1d.dir2 == -1)
     daily_bottoming = tf_1d.stage != 4 or (tf_1d.dir1 == 1 and tf_1d.dir2 == 1)
+    higher_bearish = daily_topping and tf_4h.stage == 4 and tf_2h.stage in (3, 4, 5)
     higher_bullish = daily_bottoming and tf_4h.stage == 1 and tf_2h.stage in (6, 1, 2)
 
     signal_type = "WAIT"
