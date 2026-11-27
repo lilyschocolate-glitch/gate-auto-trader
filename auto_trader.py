@@ -11,6 +11,7 @@
 import os
 import time
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from daijunkan_macd import (
     CONTRACT_SPECS,
     GateTrader,
@@ -24,6 +25,15 @@ def log(msg: str) -> None:
     """タイムスタンプ付きでログを出力する。"""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{now}] {msg}", flush=True)
+
+
+def is_us_open_whipsaw_window() -> bool:
+    """米国経済指標・米国株オープン直後のヒゲが出やすい時間帯（NY時間 平日 08:25〜09:45）かを判定する。"""
+    ny_now = datetime.now(ZoneInfo("America/New_York"))
+    if ny_now.weekday() >= 5:
+        return False
+    hhmm = ny_now.hour * 100 + ny_now.minute
+    return 825 <= hhmm < 945
 
 
 def cleanup_contract_orders(trader: GateTrader, contract: str) -> None:
@@ -125,6 +135,15 @@ def ensure_orders_for_contract(trader: GateTrader, contract: str, total_equity: 
         cleanup_contract_orders(trader, contract)
         log(f"[{contract}] 決済後に残っていた古いトリガー注文({len(price_orders)}件)を自動削除しました")
         price_orders = []
+
+    # 米国時間オープン前後の荒れやすい時間帯は新規エントリーを見送る（保有中の決済管理は通常通り動く）
+    if is_us_open_whipsaw_window():
+        if entry_orders:
+            cleanup_contract_orders(trader, contract)
+            log(f"[{contract}] 米国市場オープン直後の急変回避のため未約定の待機指値を一時キャンセルしました")
+        else:
+            log(f"[{contract}] 米国市場オープン直後の荒れやすい時間帯（NY 8:25-9:45）のため新規発注を待機します")
+        return
 
     sig_type = signal["signal_type"]
     want_short = sig_type in ("SHORT_NOW", "SHORT_LIMIT_WAIT")
